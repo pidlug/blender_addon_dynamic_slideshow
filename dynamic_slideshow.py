@@ -120,7 +120,7 @@ def get_next_camera():
     return current_cam
 
 def is_draw_type_handling():
-    return True
+    return False
 
 def move_action_on_x(action, x_movement):
     for fcurve in action.fcurves:
@@ -128,6 +128,14 @@ def move_action_on_x(action, x_movement):
             point.co.x += x_movement
             point.handle_left.x += x_movement
             point.handle_right.x += x_movement
+
+def move_action_on_x_rel(action, x_movement, relpos):
+    for fcurve in action.fcurves:
+        for point in fcurve.keyframe_points:
+            if point.co.x > relpos:
+                point.co.x += x_movement
+                point.handle_left.x += x_movement
+                point.handle_right.x += x_movement
 
 def has_sequence():
     se = bpy.context.scene.sequence_editor
@@ -361,9 +369,6 @@ class SetupSlideshowOperator(bpy.types.Operator):
                 if mesh_obj.type == 'MESH':
                     for mat_slot in mesh_obj.material_slots:
                         mat_slot.material.use_shadeless = True
-                    mesh_obj.draw_type = 'WIRE'
-                    if mesh_obj.location == Vector((0.0, 0.0, 0.0)):
-                        mesh_obj.draw_type = 'SOLID'
 
         if not has_multiple_cameras():
             result1 = execute_init_cameras(self, context)
@@ -395,12 +400,9 @@ class ActivateSecuenceCameraOperator(bpy.types.Operator):
         act_seq = se.active_strip
         print(act_seq)
         if act_seq.type == 'SCENE':
-#            if is_draw_type_handling():
-#                bpy.data.objects[bpy.context.scene.camera['picture_mesh']].draw_type = 'WIRE'
+            act_seq.animation_offset_start
             bpy.context.scene.camera = act_seq.scene_camera
             select_single_object(bpy.context.scene.camera)
-#            if is_draw_type_handling():
-#                bpy.data.objects[act_seq.scene_camera['picture_mesh']].draw_type = 'TEXTURED'
             bpy.context.scene.frame_current = act_seq.frame_start+wm.ds_effect_length
         return {'FINISHED'}
     
@@ -413,7 +415,6 @@ class ActivateSecuenceCameraOperator(bpy.types.Operator):
         if act_seq == None:
             return False
         return act_seq.type == 'SCENE' and act_seq.scene_camera != None
-
 
 class ActivateNextCameraOperator(bpy.types.Operator):
     """Acivate sequence camera"""
@@ -462,6 +463,111 @@ class ActivatePreviousCameraOperator(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         return has_camera_navigation()
+
+class UpdateSecuenceAnimationDataOperator(bpy.types.Operator):
+    """Update Animation Data"""
+    bl_idname = "dyn_slideshow.update_sequence_animation_data"
+    bl_label = "Update sequences animation data"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        wm = context.window_manager
+        
+        se = bpy.context.scene.sequence_editor
+        print(se)
+        if se == None:
+            return {'CANCELLED'}
+
+        s_length=0
+        for act_seq in se.sequences:
+          if act_seq.type == 'SCENE':
+
+            last_start = act_seq.frame_start
+            
+            # set offset in strip
+            seqDuration = act_seq.frame_final_duration
+            act_seq.animation_offset_start = act_seq.frame_start
+            act_seq.frame_final_duration = seqDuration
+            if act_seq.frame_final_end > s_length:
+              s_length = act_seq.frame_final_end
+    
+        bpy.context.scene.frame_end = wm.ds_start_frame + s_length
+
+        return {'FINISHED'}
+    
+    @classmethod
+    def poll(cls, context):
+        se = bpy.context.scene.sequence_editor
+        if se == None:
+            return False
+        return has_camera_navigation()
+
+
+class UpdateSequenceLengthOperator(bpy.types.Operator):
+    """Update SequenceLength"""
+    bl_idname = "dyn_slideshow.update_sequence_length"
+    bl_label = "Update sequence length"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        print("execute dyn_slideshow.update_sequence_length")
+        wm = context.window_manager
+        
+        se = bpy.context.scene.sequence_editor
+        print(se)
+        if se == None:
+            return {'CANCELLED'}
+
+        act_seq = se.active_strip
+        if act_seq.type == 'SCENE':
+            print ("changing length of sequence:", act_seq.name)
+            act_seq_frame_middle = act_seq.frame_start + act_seq.frame_final_duration/2
+            seqDuration = act_seq.frame_final_duration
+            act_seq.animation_offset_start = act_seq.frame_start
+            act_seq.frame_final_duration = seqDuration + wm.ds_seq_length_adjust
+            
+            # move animation to sequence
+            if act_seq.scene_camera.animation_data != None:
+                print ("move animation points to match sequence")
+                move_action_on_x_rel(act_seq.scene_camera.animation_data.action, wm.ds_seq_length_adjust, act_seq_frame_middle)
+           
+            seq_list = []
+            for n_seq in se.sequences:
+                if (n_seq.type == 'SCENE') & (n_seq.frame_start > act_seq_frame_middle):
+                    seq_list.append(n_seq)
+
+            for n_seq in seq_list:
+                print ("adjusting sequence:", n_seq.name)
+                seqDuration = n_seq.frame_final_duration
+                n_seq.frame_start += wm.ds_seq_length_adjust
+                n_seq.animation_offset_start = n_seq.frame_start
+                n_seq.frame_final_duration = seqDuration
+                
+                # move animation to sequence
+                if n_seq.scene_camera.animation_data != None:
+                    print ("move animation points to match sequence")
+                    move_action_on_x_rel(n_seq.scene_camera.animation_data.action, wm.ds_seq_length_adjust, act_seq_frame_middle)
+
+        s_length=0
+        for act_seq in se.sequences:
+            if act_seq.type == 'SCENE':
+                print ("adjusting sequence (2nd pass):", act_seq.name)
+                # set offset in strip
+                seqDuration = act_seq.frame_final_duration
+                act_seq.animation_offset_start = act_seq.frame_start
+                act_seq.frame_final_duration = seqDuration
+                if act_seq.frame_final_end > s_length:
+                    s_length = act_seq.frame_final_end
+
+        return {'FINISHED'}
+    
+    @classmethod
+    def poll(cls, context):
+        se = bpy.context.scene.sequence_editor
+        if se == None:
+            return False
+        return se.active_strip != None
+
 
 class AddEffectTypeOperator(bpy.types.Operator):
     """Add effect type"""
@@ -759,6 +865,19 @@ class DynamicSlideshowPanel(bpy.types.Panel):
         col = layout.row(align=True)
         col.operator(ActivatePreviousCameraOperator.bl_idname, 'Previous')
         col.operator(ActivateNextCameraOperator.bl_idname, 'Next')
+
+        layout.separator()
+
+        box = layout.box()
+        box.prop(wm, 'ds_seq_length_adjust', text="Length adjustment")
+        layout.operator(UpdateSequenceLengthOperator.bl_idname, 'Update sequence length')
+
+        layout.separator()
+
+        layout.label('Update animation:')
+        layout.operator(UpdateSecuenceAnimationDataOperator.bl_idname, 'Update sequences animation data')
+        
+
         
 #################
 
@@ -767,8 +886,8 @@ def register():
     
     bpy.app.handlers.frame_change_pre.append(frame_change_handler)
     
-    bpy.types.WindowManager.ds_sequence_length = IntProperty(min = 1, default = 100, description='Sequence length without effect length')
-    bpy.types.WindowManager.ds_effect_length = IntProperty(min = 0, default = 25, description='Sequence effect length, added to sequence length')
+    bpy.types.WindowManager.ds_sequence_length = IntProperty(min = 1, default = 500, description='Sequence length without effect length')
+    bpy.types.WindowManager.ds_effect_length = IntProperty(min = 0, default = 100, description='Sequence effect length, added to sequence length')
     bpy.types.WindowManager.ds_start_frame = IntProperty(min = 1, default = 1, description='Frame the first sequence starts')
     
     bpy.types.WindowManager.ds_expand_effect = BoolProperty(default=False)
@@ -781,9 +900,9 @@ def register():
         )
     
     bpy.types.Scene.ds_effect_types = CollectionProperty(type=EffectCollection, name='Effect types:', description='Effect list for adding to VSE.')
-    
     bpy.types.Scene.ds_effect_type_index = IntProperty(name='ds_effect_type_index')
     
+    bpy.types.WindowManager.ds_seq_length_adjust = IntProperty(min = -1000, max = 1000, default = 100, description='Sequence length adjustment')
 
 def unregister():
     bpy.utils.unregister_module(__name__)
